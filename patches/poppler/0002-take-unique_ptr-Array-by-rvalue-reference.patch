@@ -1,0 +1,26 @@
+Object.h: take std::unique_ptr<Array> by rvalue reference, not by value.
+
+By value instantiates std::default_delete<Array>::operator() in Object.h, where Array is only
+forward declared. libc++ makes ~unique_ptr constexpr for C++23 and Poppler sets
+CMAKE_CXX_STANDARD 23, so the "cannot delete an incomplete type" static_assert fires. That
+broke 71 of 84 core translation units.
+
+The neighbouring Object(std::unique_ptr<Dict> &&) and Object(std::unique_ptr<StreamType> &&)
+already take rvalue references, so this only makes Array consistent. Every call site already
+passes an rvalue, and unique_ptr is not copyable, so no caller can be affected.
+
+Reproduces for any libc++ build of Poppler at C++23, not just WASI. Upstreamable as-is.
+
+diff --git a/poppler/Object.h b/poppler/Object.h
+index eac2f5a4..e60d2094 100644
+--- a/poppler/Object.h
++++ b/poppler/Object.h
+@@ -149,7 +149,7 @@ public:
+ 
+     explicit Object(long long int64gA) : type { objInt64 }, data { int64gA } { }
+ 
+-    explicit Object(std::unique_ptr<Array> arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
++    explicit Object(std::unique_ptr<Array> &&arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
+ 
+     explicit Object(std::unique_ptr<Dict> &&dictA) : type { objDict }, data { std::shared_ptr<Dict>(std::move(dictA)) } { }
+ 
