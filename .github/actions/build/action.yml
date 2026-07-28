@@ -1,0 +1,61 @@
+name: Build poppler-wasi
+description: Restore caches, install tools, cross-compile the modules, install wasmtime.
+
+inputs:
+  cache-scope:
+    description: Opaque key fragment scoping the ccache entry (poppler ref, or a job name).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cache wasi-sdk toolchain
+      uses: actions/cache@v6
+      with:
+        path: toolchain
+        key: wasi-sdk-${{ runner.os }}-${{ hashFiles('scripts/versions.env', 'scripts/wasi-sdk.sha256') }}
+        restore-keys: wasi-sdk-${{ runner.os }}-
+
+    - name: Cache dependency sources and staging prefix
+      uses: actions/cache@v6
+      with:
+        path: |
+          build/src
+          build/deps
+        key: deps-${{ runner.os }}-${{ hashFiles('scripts/versions.env', 'scripts/build.sh') }}
+        restore-keys: deps-${{ runner.os }}-
+
+    # run_id forces a fresh key each run; restore-keys mean a poppler bump warm-starts
+    # from the previous cache instead of compiling cold.
+    - name: Cache ccache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ccache
+        key: ccache-${{ runner.os }}-${{ inputs.cache-scope }}-${{ github.run_id }}
+        restore-keys: |
+          ccache-${{ runner.os }}-${{ inputs.cache-scope }}-
+          ccache-${{ runner.os }}-
+
+    - name: Install host build tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends cmake ninja-build ccache
+
+    - shell: bash
+      run: make build
+
+    # versions.env is the single source of truth for pinned versions, wasmtime included.
+    - id: versions
+      shell: bash
+      run: . scripts/versions.env && echo "wasmtime=$WASMTIME_VERSION" >> "$GITHUB_OUTPUT"
+
+    - uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: ${{ steps.versions.outputs.wasmtime }}
+        github_token: ${{ github.token }}
+
+    - name: ccache statistics
+      if: always()
+      shell: bash
+      run: ccache --show-stats

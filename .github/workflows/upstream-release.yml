@@ -1,0 +1,200 @@
+name: upstream-release
+
+# What gets released, precisely:
+#
+# On schedule it builds ONLY the single newest upstream stable tag. It does not backfill: if
+# two upstream releases land between runs, the older one is skipped permanently. So the first
+# scheduled run publishes just the current latest, not the whole history.
+#
+# Use the manual trigger with `tag` to build any specific version, which is how you backfill
+# or rebuild. Blank means "newest stable", same as the schedule.
+#
+# Every six days, to stay inside the 7-day Actions cache idle-eviction window so the
+# toolchain/deps/ccache caches are warm. Note day-of-month */6 fires on the 1st, 7th, 13th,
+# 19th and 25th, so the 25th -> 1st wrap is 6-7 days; all caches therefore carry restore-keys
+# prefixes so an evicted exact key still warm-starts.
+#
+# Both jobs commit straight to main. Nothing is pushed before it has built and tested, so main only
+# receives green commits -- but note ci.yml is pull_request only and does not re-run on them; the
+# testing happens here instead.
+on:
+  schedule:
+    - cron: "0 5 */6 * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version to build, e.g. 26.06.0 or poppler-26.06.0. Blank = newest stable.'
+        required: false
+        type: string
+      force:
+        description: 'Rebuild and replace assets even if the release already exists'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-release
+  cancel-in-progress: false
+
+jobs:
+  # Keeps the pins moving without giving up reproducibility. Poppler only sets a FreeType floor,
+  # so newer is always allowed -- but a floating dependency cannot be checksummed and makes a
+  # release unreproducible, and FreeType parses untrusted font data, so its updates should not
+  # wait for a poppler bump to force them.
+  deps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: make submodule
+
+      - name: Repin dependencies to newest stable
+        id: repin
+        run: |
+          set -eu
+          scripts/update-deps.sh
+          if git diff --quiet -- scripts/versions.env; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dependencies already newest."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- scripts/versions.env
+          fi
+
+      - uses: ./.github/actions/build
+        if: steps.repin.outputs.changed == 'true'
+        with:
+          cache-scope: deps-update
+
+      # Gates the push: a bump that breaks the build or changes extraction output must not land.
+      - name: Test
+        if: steps.repin.outputs.changed == 'true'
+        run: make test
+
+      - name: Push dependency bump
+        if: steps.repin.outputs.changed == 'true'
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/versions.env
+          git commit -m "chore: repin freetype and zlib to newest stable"
+          git push origin HEAD:main
+
+  # After deps, so the two cannot race pushing to main. always() keeps a dependency-side failure
+  # from blocking poppler releases.
+  release:
+    needs: deps
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      # Detection lives in a script so it is runnable locally, and so the version always
+      # comes from upstream's tags rather than anything pinned here.
+      - name: Resolve target version
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -eu
+          if [ -z "$INPUT_TAG" ]; then
+            tag=$(scripts/check-upstream.sh)
+          else
+            case "$INPUT_TAG" in poppler-*) tag=$INPUT_TAG ;; *) tag="poppler-$INPUT_TAG" ;; esac
+            git ls-remote --exit-code --tags \
+              https://gitlab.freedesktop.org/poppler/poppler.git "refs/tags/$tag" >/dev/null \
+              || { echo "::error::no upstream tag $tag"; exit 1; }
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#poppler-}" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$tag" >/dev/null 2>&1 && [ "$FORCE" != "true" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release $tag already exists; nothing to do."
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Building $tag."
+          fi
+
+      - name: Check out poppler at target version
+        if: steps.detect.outputs.needed == 'true'
+        run: |
+          set -eu
+          git submodule update --init --depth 1 third_party/poppler \
+            || git submodule update --init third_party/poppler
+          tag='${{ steps.detect.outputs.tag }}'
+          git -C third_party/poppler fetch --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
+          git -C third_party/poppler checkout --detach "$tag"
+
+      # A poppler bump can raise the FreeType floor above our pin. Repin rather than fail, so an
+      # unattended release is never blocked.
+      - name: Repin dependencies if poppler now needs newer
+        if: steps.detect.outputs.needed == 'true'
+        run: scripts/update-deps.sh --if-needed
+
+      - uses: ./.github/actions/build
+        if: steps.detect.outputs.needed == 'true'
+        with:
+          cache-scope: ${{ steps.detect.outputs.tag }}
+
+      # Failure here publishes nothing and leaves main untouched. Extraction output changing across
+      # a bump is exactly the case a human should look at.
+      - name: Test
+        if: steps.detect.outputs.needed == 'true'
+        run: make test
+
+      - name: Push submodule bump
+        if: steps.detect.outputs.needed == 'true'
+        id: push
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add third_party/poppler scripts/versions.env
+          # Nothing staged when re-releasing a version main already points at.
+          git commit -m "chore: bump poppler submodule to ${{ steps.detect.outputs.version }}" \
+            || echo "::notice::main already at this version"
+          # Rebase in case the deps job pushed while this job was building.
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: steps.detect.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -eu
+          assets="dist/*.wasm dist/*.wasm.sha256 dist/BUILD-INFO.txt"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" $assets --clobber
+          else
+            { echo 'Upstream Poppler ${{ steps.detect.outputs.version }} as standalone'
+              echo '`wasm32-wasip1` WASI command modules.'
+              echo
+              echo '```'
+              echo 'wasmtime run pdftotext.wasm -layout - - < input.pdf > output.txt'
+              echo '```'
+              echo
+              echo '## Build provenance'
+              echo
+              echo '```'
+              cat dist/BUILD-INFO.txt
+              echo '```'
+            } > notes.md
+            # shellcheck disable=SC2086
+            gh release create "$TAG" \
+              --target "${{ steps.push.outputs.sha }}" \
+              --title "poppler-wasi ${{ steps.detect.outputs.version }}" \
+              --notes-file notes.md $assets
+          fi
