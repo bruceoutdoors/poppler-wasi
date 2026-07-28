@@ -1,0 +1,19 @@
+# pdftotext golden cases, shared by make-goldens.sh (which generates the expected output
+# using a NATIVE poppler) and run-tests.sh (which checks the WASI modules against it).
+# Keeping one list means the two can never disagree about what is covered.
+#
+# Every case reads the PDF from stdin and writes text to stdout ("- -"), which is the
+# invocation from the project brief and the one that needs no filesystem access at all.
+#
+# Format:  <name>  <fixture>  [flags...]
+# Blank lines and # comments are ignored.
+
+layout.layout       layout.pdf      -layout
+layout.default      layout.pdf
+simple.default      simple.pdf
+simple.raw          simple.pdf      -raw
+simple.utf8         simple.pdf      -enc UTF-8
+simple.nopgbrk      simple.pdf      -nopgbrk
+flate.default       flate.pdf
+multipage.default   multipage.pdf
+multipage.page2     multipage.pdf   -f 2 -l 2

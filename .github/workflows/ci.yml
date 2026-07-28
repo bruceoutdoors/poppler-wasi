@@ -1,0 +1,40 @@
+name: ci
+
+# PRs only: main is only ever updated via PR, and the release workflow builds and tests
+# independently before publishing.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read pinned poppler commit
+        id: pin
+        run: echo "sha=$(git rev-parse HEAD:third_party/poppler)" >> "$GITHUB_OUTPUT"
+
+      # Cached separately from checkout so the submodule fetch stays shallow; poppler's full
+      # history is hundreds of megabytes and none of it is needed.
+      - name: Cache poppler submodule objects
+        uses: actions/cache@v6
+        with:
+          path: .git/modules/third_party/poppler
+          key: poppler-git-${{ steps.pin.outputs.sha }}
+          restore-keys: poppler-git-
+
+      - run: make submodule
+
+      - uses: ./.github/actions/build
+        with:
+          cache-scope: ${{ steps.pin.outputs.sha }}
+
+      - run: make test
