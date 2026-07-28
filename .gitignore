@@ -1,0 +1,8 @@
+/build/
+/dist/
+/toolchain/
+
+__pycache__/
+
+# macOS
+.DS_Store
