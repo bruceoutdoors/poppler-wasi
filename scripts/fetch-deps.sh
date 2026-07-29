@@ -10,15 +10,23 @@ need curl
 need tar
 
 zlib_tarball="$SRC_CACHE/zlib-${ZLIB_VERSION}.tar.xz"
-fetch_verified "$zlib_tarball" "$ZLIB_SHA256" \
-    "https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.xz"
+fetch_verified "$zlib_tarball" "$ZLIB_SHA256" "$ZLIB_URL"
 unpack_tarball "$zlib_tarball" "$SRC_CACHE/zlib-${ZLIB_VERSION}" CMakeLists.txt
 
-# SourceForge mirrors the identical tarball; Savannah 502s often enough to break CI.
 freetype_tarball="$SRC_CACHE/freetype-${FREETYPE_VERSION}.tar.xz"
-fetch_verified "$freetype_tarball" "$FREETYPE_SHA256" \
-    "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz" \
-    "https://downloads.sourceforge.net/project/freetype/freetype2/${FREETYPE_VERSION}/freetype-${FREETYPE_VERSION}.tar.xz"
+fetch_verified "$freetype_tarball" "$FREETYPE_SHA256" "$FREETYPE_URL" "$FREETYPE_MIRROR"
 unpack_tarball "$freetype_tarball" "$SRC_CACHE/freetype-${FREETYPE_VERSION}" CMakeLists.txt
+
+# Drop sources for versions no longer pinned, so a restored CI cache does not accumulate them
+# bump after bump. The '*' case is an unmatched glob.
+for stale in "$SRC_CACHE"/zlib-* "$SRC_CACHE"/freetype-*; do
+    case $stale in
+        *'*') continue ;;
+        "$SRC_CACHE/zlib-${ZLIB_VERSION}" | "$zlib_tarball") continue ;;
+        "$SRC_CACHE/freetype-${FREETYPE_VERSION}" | "$freetype_tarball") continue ;;
+    esac
+    log "removing stale source $(basename "$stale")"
+    rm -rf "$stale"
+done
 
 log "dependency sources ready"

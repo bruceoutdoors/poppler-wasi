@@ -11,6 +11,14 @@ export REPO_ROOT
 
 POPPLER_SRC="$REPO_ROOT/third_party/poppler"
 POPPLER_URL="https://gitlab.freedesktop.org/poppler/poppler.git"
+
+# Dependency tarballs. Here rather than in fetch-deps.sh because build.sh records them in
+# dist/BUILD-INFO.txt as the corresponding-source pointers.
+ZLIB_URL="https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.xz"
+FREETYPE_URL="https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
+# SourceForge mirrors the identical tarball; Savannah 502s often enough to break CI.
+FREETYPE_MIRROR="https://downloads.sourceforge.net/project/freetype/freetype2/${FREETYPE_VERSION}/freetype-${FREETYPE_VERSION}.tar.xz"
+
 BUILD_DIR="$REPO_ROOT/build"
 SRC_CACHE="$BUILD_DIR/src"
 DEPS_PREFIX="$BUILD_DIR/deps/prefix"

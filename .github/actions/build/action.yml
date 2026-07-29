@@ -10,14 +10,14 @@ runs:
   using: composite
   steps:
     - name: Cache wasi-sdk toolchain
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: toolchain
         key: wasi-sdk-${{ runner.os }}-${{ hashFiles('scripts/versions.env', 'scripts/wasi-sdk.sha256') }}
         restore-keys: wasi-sdk-${{ runner.os }}-
 
     - name: Cache dependency sources and staging prefix
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: |
           build/src
@@ -28,7 +28,7 @@ runs:
     # run_id forces a fresh key each run; restore-keys mean a poppler bump warm-starts
     # from the previous cache instead of compiling cold.
     - name: Cache ccache
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.cache/ccache
         key: ccache-${{ runner.os }}-${{ inputs.cache-scope }}-${{ github.run_id }}
@@ -50,7 +50,7 @@ runs:
       shell: bash
       run: . scripts/versions.env && echo "wasmtime=$WASMTIME_VERSION" >> "$GITHUB_OUTPUT"
 
-    - uses: bytecodealliance/actions/wasmtime/setup@v1
+    - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1
       with:
         version: ${{ steps.versions.outputs.wasmtime }}
         github_token: ${{ github.token }}
