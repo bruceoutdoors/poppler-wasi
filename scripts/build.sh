@@ -102,6 +102,17 @@ configure_build_install() {
     quietly cmake --install "$_build"
 }
 
+# Each build tree under build/deps is configured against a source path carrying the dependency
+# version, and build/deps/prefix holds their install. A CI cache restored across a version bump
+# hands cmake a tree configured for the old source dir, which is a hard error -- so start clean
+# whenever the pins move. Also stops old versions accumulating in the cache.
+DEPS_STAMP="$BUILD_DIR/deps/.pins"
+DEPS_PINS="zlib=$ZLIB_VERSION freetype=$FREETYPE_VERSION wasi-sdk=$WASI_SDK_VERSION"
+if [ "$(cat "$DEPS_STAMP" 2>/dev/null || true)" != "$DEPS_PINS" ]; then
+    [ ! -d "$BUILD_DIR/deps" ] || log "dependency pins changed; rebuilding deps"
+    rm -rf "$BUILD_DIR/deps"
+fi
+
 # The shared library cannot link for wasm; examples are test-only. The static target's
 # OUTPUT_NAME is plain "z", so CMake's FindZLIB finds libz.a.
 configure_build_install zlib "$SRC_CACHE/zlib-${ZLIB_VERSION}" \
@@ -118,6 +129,8 @@ configure_build_install freetype "$SRC_CACHE/freetype-${FREETYPE_VERSION}" \
     -DFT_DISABLE_PNG=TRUE \
     -DFT_DISABLE_HARFBUZZ=TRUE \
     -DFT_DISABLE_BROTLI=TRUE
+
+printf '%s' "$DEPS_PINS" >"$DEPS_STAMP"
 
 "$REPO_ROOT/scripts/apply-patches.sh"
 
@@ -168,28 +181,56 @@ is_wasm() {
     [ "$(od -N4 -An -tx1 "$1" | tr -d ' \n')" = "0061736d" ]
 }
 
+# An explicit list, not whatever turns up in utils/: a utility added by a future poppler release
+# must not reach a release without a test, a README entry and a look at what it links.
+MODULES='pdfattach pdfdetach pdffonts pdfimages pdfinfo pdfseparate
+         pdftohtml pdftoppm pdftops pdftotext pdfunite'
+
+# Nearly two thirds of each module is DWARF from wasi-sdk's prebuilt libc and libc++, not from our
+# own -O2 -DNDEBUG compilation. Stripped when staging rather than with a linker flag, so the
+# binaries under build/ keep their debug info.
+STRIP="$WASI_SDK_PATH/bin/llvm-strip"
+
 count=0
-for built in "$POPPLER_BUILD"/utils/*; do
-    [ -f "$built" ] || continue
-    is_wasm "$built" || continue
-    name=$(basename "$built" .wasm).wasm
-    cp "$built" "$DIST_DIR/$name"
-    (cd "$DIST_DIR" && printf '%s  %s\n' "$(sha256_of "$name")" "$name" >"$name.sha256")
+for name in $MODULES; do
+    built="$POPPLER_BUILD/utils/$name"
+    [ -f "$built" ] || built="$built.wasm"
+    [ -f "$built" ] || die "expected module '$name' was not built in $POPPLER_BUILD/utils"
+    is_wasm "$built" || die "$built is not a wasm module"
+    "$STRIP" "$built" -o "$DIST_DIR/$name.wasm"
+    (cd "$DIST_DIR" &&
+        printf '%s  %s\n' "$(sha256_of "$name.wasm")" "$name.wasm" >"$name.wasm.sha256")
     count=$((count + 1))
 done
-[ "$count" -gt 0 ] || die "no wasm modules produced in $POPPLER_BUILD/utils"
 
+# Logged, not fatal: a new upstream utility should not block an unattended release.
+for built in "$POPPLER_BUILD"/utils/*; do
+    { [ -f "$built" ] && is_wasm "$built"; } || continue
+    extra=$(basename "$built" .wasm)
+    [ -f "$DIST_DIR/$extra.wasm" ] ||
+        log "note: upstream built '$extra', which is not in the published module list"
+done
+
+poppler_commit=$(git -C "$POPPLER_SRC" rev-parse HEAD)
 {
     printf 'poppler-wasi build info\n'
     printf 'poppler tag:        %s\n' \
         "$(git -C "$POPPLER_SRC" describe --tags --exact-match 2>/dev/null || echo '(untagged)')"
-    printf 'poppler commit:     %s\n' "$(git -C "$POPPLER_SRC" rev-parse HEAD)"
+    printf 'poppler commit:     %s\n' "$poppler_commit"
     printf 'wasi-sdk:           %s\n' "$WASI_SDK_VERSION"
     printf 'freetype:           %s\n' "$FREETYPE_VERSION"
     printf 'zlib:               %s\n' "$ZLIB_VERSION"
     printf 'target:             wasm32-wasip1\n'
     printf 'font configuration: generic (no fontconfig)\n'
+    printf 'stripped:           yes (DWARF and name sections removed)\n'
     printf 'modules:            %s\n' "$count"
+    printf '\ncorresponding source\n'
+    printf '  poppler:  git clone %s && git checkout %s\n' "$POPPLER_URL" "$poppler_commit"
+    printf '  patches:  patches/poppler/*.patch in this repository\n'
+    printf '  freetype: %s\n' "$FREETYPE_URL"
+    printf '            sha256 %s\n' "$FREETYPE_SHA256"
+    printf '  zlib:     %s\n' "$ZLIB_URL"
+    printf '            sha256 %s\n' "$ZLIB_SHA256"
 } >"$DIST_DIR/BUILD-INFO.txt"
 
 log "built $count modules into $DIST_DIR"

@@ -19,6 +19,15 @@ command -v pdftotext >/dev/null 2>&1 || { echo "need a native pdftotext" >&2; ex
 command -v wasmtime >/dev/null 2>&1 || { echo "need wasmtime" >&2; exit 1; }
 [ -f "$DIST/pdftotext.wasm" ] || { echo "no $DIST/pdftotext.wasm; run 'make build'" >&2; exit 1; }
 
+# /usr/bin/time is BSD on macOS (-l) and GNU on Linux (-v); the two report differently too.
+if /usr/bin/time -l true >/dev/null 2>&1; then
+    TIME_FLAG=-l
+elif /usr/bin/time -v true >/dev/null 2>&1; then
+    TIME_FLAG=-v
+else
+    echo "need /usr/bin/time supporting -l (BSD) or -v (GNU)" >&2; exit 1
+fi
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 pdf="$tmp/bench.pdf"
@@ -57,13 +66,17 @@ best_wall() {
     printf '%s' "$_best"
 }
 
-# total cpu seconds and peak RSS in KiB, from one run
+# total cpu seconds and peak RSS in KiB, from one run. The two time formats cannot collide: BSD
+# spells its RSS line lowercase and reports bytes, GNU capitalises it and reports KiB.
 resources() {
-    /usr/bin/time -l "$@" >/dev/null 2>"$tmp/time.txt" || true
+    /usr/bin/time "$TIME_FLAG" "$@" >/dev/null 2>"$tmp/time.txt" || true
     awk '
-        / real .* user .* sys/ { cpu = $3 + $5 }
-        /maximum resident set size/ { rss = $1 }
-        END { printf "%.2f %d", cpu, rss / 1024 }
+        / real .* user .* sys/      { cpu = $3 + $5 }
+        /maximum resident set size/ { rss = $1 / 1024 }
+        /User time \(seconds\)/     { cpu += $NF }
+        /System time \(seconds\)/   { cpu += $NF }
+        /Maximum resident set size/ { rss = $NF }
+        END { printf "%.2f %d", cpu, rss }
     ' "$tmp/time.txt"
 }
 

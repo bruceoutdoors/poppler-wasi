@@ -47,7 +47,19 @@ jobs:
   deps:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Same as ci.yml: keeps the submodule fetch shallow, poppler's full history is hundreds of MB.
+      - name: Read pinned poppler commit
+        id: pin
+        run: echo "sha=$(git rev-parse HEAD:third_party/poppler)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache poppler submodule objects
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .git/modules/third_party/poppler
+          key: poppler-git-${{ steps.pin.outputs.sha }}
+          restore-keys: poppler-git-
 
       - run: make submodule
 
@@ -91,7 +103,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
 
@@ -123,6 +135,16 @@ jobs:
             echo "needed=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Building $tag."
           fi
+
+      # Keyed on the target tag, but the shared restore-keys prefix means a cache from any other
+      # poppler ref still warm-starts this fetch; most objects are common.
+      - name: Cache poppler submodule objects
+        if: steps.detect.outputs.needed == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .git/modules/third_party/poppler
+          key: poppler-git-${{ steps.detect.outputs.tag }}
+          restore-keys: poppler-git-
 
       - name: Check out poppler at target version
         if: steps.detect.outputs.needed == 'true'
@@ -187,6 +209,11 @@ jobs:
               echo '```'
               echo
               echo '## Build provenance'
+              echo
+              echo 'Build scripts and patches: this repository at'
+              echo '`${{ steps.push.outputs.sha }}`. Everything else, including the exact upstream'
+              echo 'sources these binaries were built from, is below and in the'
+              echo '`BUILD-INFO.txt` asset.'
               echo
               echo '```'
               cat dist/BUILD-INFO.txt
