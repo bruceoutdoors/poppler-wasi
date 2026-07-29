@@ -26,12 +26,3 @@ an upstream tag. Bumping Poppler is then a one-line pin change rather than rebas
 Because patches are applied to the submodule worktree at build time, the submodule is
 normally dirty after a build. `.gitmodules` sets `ignore = dirty` for it so this does not
 show up as a spurious change in `git status`; the pinned commit is still tracked as usual.
-
-## Current patches
-
-| Patch | Why |
-| --- | --- |
-| `0001-drop-unused-pwd-h-include.patch` | wasi-libc has no `<pwd.h>`. Nothing in Poppler uses `passwd`/`getpwnam`, so the include is stale and removing it is a no-op everywhere. |
-| `0002-take-unique_ptr-Array-by-rvalue-reference.patch` | Taking `unique_ptr<Array>` by value instantiates the deleter where `Array` is incomplete. libc++ makes `~unique_ptr` constexpr at C++23, so the "cannot delete an incomplete type" assertion fires and breaks 71 of 84 core translation units. The neighbouring `Dict`/`Stream` constructors already take `&&`. |
-
-Neither is WASI-specific: patch 2 reproduces for any libc++ build of Poppler at C++23.
