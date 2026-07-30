@@ -1,0 +1,46 @@
+Changes needed to build Poppler for wasm32-wasip1.
+
+Kept outside third_party/poppler so the submodule stays a pristine upstream checkout and
+bumping it is a one-line pin change. Prefer CMake options over patching; this file is for
+what configuration cannot express. Both changes below are plain upstream bugs that surface
+on WASI first, not WASI-specific workarounds, so they are upstreamable and this file should
+shrink to nothing.
+
+1. goo/gfile.cc: drop the unused <pwd.h> include.
+   wasi-libc has no user database, so the include is a hard build failure. Nothing in
+   Poppler references getpwnam/getpwuid/struct passwd -- this was the only mention of pwd.h
+   in the tree -- so removing it is a no-op everywhere.
+
+2. poppler/Object.h: take std::unique_ptr<Array> by rvalue reference, not by value.
+   By value instantiates std::default_delete<Array>::operator() where Array is only forward
+   declared. libc++ makes ~unique_ptr constexpr for C++23 and Poppler sets
+   CMAKE_CXX_STANDARD 23, so the "cannot delete an incomplete type" static_assert fires,
+   breaking 71 of 84 core translation units. The neighbouring Dict and Stream constructors
+   already take &&, every call site already passes an rvalue, and unique_ptr is not
+   copyable, so no caller can be affected. Reproduces for any libc++ build at C++23.
+
+diff --git a/goo/gfile.cc b/goo/gfile.cc
+index 32e892b6..56f79313 100644
+--- a/goo/gfile.cc
++++ b/goo/gfile.cc
+@@ -43,7 +43,6 @@
+ #    include <sys/stat.h>
+ #    include <fcntl.h>
+ #    include <cstring>
+-#    include <pwd.h>
+ #endif // _WIN32
+ #include <cstdio>
+ #include <limits>
+diff --git a/poppler/Object.h b/poppler/Object.h
+index eac2f5a4..e60d2094 100644
+--- a/poppler/Object.h
++++ b/poppler/Object.h
+@@ -149,7 +149,7 @@ public:
+ 
+     explicit Object(long long int64gA) : type { objInt64 }, data { int64gA } { }
+ 
+-    explicit Object(std::unique_ptr<Array> arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
++    explicit Object(std::unique_ptr<Array> &&arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
+ 
+     explicit Object(std::unique_ptr<Dict> &&dictA) : type { objDict }, data { std::shared_ptr<Dict>(std::move(dictA)) } { }
+ 

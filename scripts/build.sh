@@ -226,7 +226,7 @@ poppler_commit=$(git -C "$POPPLER_SRC" rev-parse HEAD)
     printf 'modules:            %s\n' "$count"
     printf '\ncorresponding source\n'
     printf '  poppler:  git clone %s && git checkout %s\n' "$POPPLER_URL" "$poppler_commit"
-    printf '  patches:  patches/poppler/*.patch in this repository\n'
+    printf '  patches:  patches/poppler.patch in this repository\n'
     printf '  freetype: %s\n' "$FREETYPE_URL"
     printf '            sha256 %s\n' "$FREETYPE_SHA256"
     printf '  zlib:     %s\n' "$ZLIB_URL"

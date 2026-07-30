@@ -46,7 +46,7 @@ check-upstream: ## print the newest stable upstream poppler tag
 update-deps: ## repin freetype and zlib in versions.env to newest stable
 	@scripts/update-deps.sh
 
-patch: ## apply patches/poppler/*.patch to the submodule
+patch: ## apply patches/poppler.patch to the submodule
 	@scripts/apply-patches.sh
 
 unpatch: ## restore a pristine poppler checkout
