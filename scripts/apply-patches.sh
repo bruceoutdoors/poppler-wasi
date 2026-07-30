@@ -1,10 +1,11 @@
 #!/bin/sh
-# Apply (or reset) patches/poppler/*.patch against the submodule.
+# Reset the poppler submodule to its pinned commit, then apply patches/poppler.patch.
 #
-# Patches live outside the submodule so third_party/poppler stays a pristine upstream checkout
-# and bumping it never means rebasing a fork.
+# Resetting first makes this idempotent without tracking whether the patch is already applied:
+# the submodule worktree is always exactly "upstream tag + patches/poppler.patch". The cost is
+# that hand edits inside third_party/poppler are discarded on every build.
 #
-# Usage: apply-patches.sh [--reset]
+# Usage: apply-patches.sh [--reset]   (--reset leaves the tree pristine, unpatched)
 
 . "$(dirname -- "$0")/common.sh"
 
@@ -13,29 +14,15 @@ need git
 [ -f "$POPPLER_SRC/CMakeLists.txt" ] ||
     die "poppler submodule not initialised; run 'make submodule' first"
 
+git -C "$POPPLER_SRC" checkout --quiet -- .
+
 if [ "${1:-}" = "--reset" ]; then
-    log "restoring pristine poppler checkout"
-    git -C "$POPPLER_SRC" checkout -- .
-    git -C "$POPPLER_SRC" clean -fd
+    log "poppler checkout is pristine"
     exit 0
 fi
 
-patches=$(find "$REPO_ROOT/patches/poppler" -name '*.patch' -type f 2>/dev/null | sort)
+git -C "$POPPLER_SRC" apply "$REPO_ROOT/patches/poppler.patch" ||
+    die "patches/poppler.patch does not apply to this poppler version.
+Refresh it, or drop the hunks upstream has fixed."
 
-if [ -z "$patches" ]; then
-    log "no patches to apply"
-    exit 0
-fi
-
-for p in $patches; do
-    name=$(basename "$p")
-    if git -C "$POPPLER_SRC" apply --reverse --check "$p" 2>/dev/null; then
-        log "already applied: $name"
-        continue
-    fi
-    git -C "$POPPLER_SRC" apply --check "$p" 2>/dev/null ||
-        die "patch does not apply cleanly: $name
-The submodule was probably bumped past it. Refresh or drop the patch."
-    log "applying $name"
-    git -C "$POPPLER_SRC" apply "$p"
-done
+log "applied patches/poppler.patch"
